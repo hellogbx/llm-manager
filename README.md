@@ -47,7 +47,7 @@
 
 ```bash
 cd ~/workspaces/mywork/llm-manager
-./scripts/build.sh --release      # 编译（自动使用上层目录的 .rust 工具链，若有）
+./scripts/build.sh --release      # 编译（自动使用项目内 .rust 工具链）
 ./scripts/package.sh              # 打包成 dist/LLM Manager.app
 open "dist/LLM Manager.app"
 ```
