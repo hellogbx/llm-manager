@@ -105,6 +105,9 @@ pub struct Config {
     pub services: Vec<ServiceDef>,
     #[serde(default = "default_refresh")]
     pub refresh_secs: u64,
+    /// Model catalog endpoint. `None` tries the mirror first, then the official site.
+    #[serde(default)]
+    pub hub_endpoint: Option<String>,
 }
 
 impl Default for Config {
@@ -114,6 +117,7 @@ impl Default for Config {
             llama_server: None,
             services: Vec::new(),
             refresh_secs: default_refresh(),
+            hub_endpoint: None,
         }
     }
 }
@@ -152,6 +156,7 @@ impl Config {
             llama_server: find_llama_server(),
             services: Vec::new(),
             refresh_secs: default_refresh(),
+            hub_endpoint: None,
         }
     }
 
@@ -165,9 +170,7 @@ impl Config {
     }
 
     pub fn service(&self, id: &str) -> Option<&ServiceDef> {
-        self.services
-            .iter()
-            .find(|s| s.id == id || s.name == id)
+        self.services.iter().find(|s| s.id == id || s.name == id)
     }
 
     pub fn next_free_port(&self) -> u16 {

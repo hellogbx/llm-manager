@@ -2,7 +2,12 @@
 name = "llm-manager"
 version = "0.1.0"
 edition = "2021"
-description = "Local LLM manager: models, services, status"
+description = "Local GGUF model manager: discover, download and serve models with llama.cpp"
+license = "MIT"
+readme = "README.md"
+keywords = ["llm", "gguf", "llama.cpp", "egui", "desktop"]
+categories = ["gui", "command-line-utilities"]
+exclude = ["docs/screenshots/*"]
 
 [[bin]]
 name = "llmmgr"

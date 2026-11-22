@@ -84,7 +84,8 @@ pub fn port_in_use(host: &str, port: u16) -> bool {
 /// Minimal HTTP/1.1 GET, enough to talk to llama-server's local endpoints.
 pub fn http_get(host: &str, port: u16, path: &str, timeout_ms: u64) -> Result<String, String> {
     let target = format!("{host}:{port}");
-    let addrs = target.to_socket_addrs()
+    let addrs = target
+        .to_socket_addrs()
         .map_err(|e| format!("{target}: {e}"))?
         .collect::<Vec<SocketAddr>>();
     let addr = *addrs.first().ok_or("无法解析地址")?;
@@ -133,7 +134,10 @@ pub fn http_get(host: &str, port: u16, path: &str, timeout_ms: u64) -> Result<St
         let first = head.lines().next().unwrap_or("?");
         return Err(format!("HTTP {first}"));
     }
-    if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         Ok(dechunk(body))
     } else {
         Ok(body.to_string())
@@ -143,11 +147,7 @@ pub fn http_get(host: &str, port: u16, path: &str, timeout_ms: u64) -> Result<St
 fn dechunk(body: &str) -> String {
     let mut out = String::new();
     let mut rest = body;
-    loop {
-        let line_end = match rest.find("\r\n") {
-            Some(idx) => idx,
-            None => break,
-        };
+    while let Some(line_end) = rest.find("\r\n") {
         let size_text = rest[..line_end].trim();
         let size = match usize::from_str_radix(size_text, 16) {
             Ok(size) => size,

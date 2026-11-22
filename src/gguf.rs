@@ -140,8 +140,8 @@ fn type_width(kind: u32) -> u64 {
     match kind {
         0 | 1 | 7 => 1,
         2 | 3 => 2,
-        4 | 5 | 6 => 4,
-        10 | 11 | 12 => 8,
+        4..=6 => 4,
+        10..=12 => 8,
         _ => 0,
     }
 }
@@ -277,7 +277,10 @@ pub fn quant_from_name(name: &str) -> Option<String> {
     ];
     KNOWN
         .iter()
-        .find(|q| name.to_ascii_uppercase().contains(&format!("-{q}")) || name.to_ascii_uppercase().contains(&format!("_{q}")))
+        .find(|q| {
+            name.to_ascii_uppercase().contains(&format!("-{q}"))
+                || name.to_ascii_uppercase().contains(&format!("_{q}"))
+        })
         .map(|q| q.to_string())
 }
 

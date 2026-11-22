@@ -4,8 +4,10 @@
 
 mod config;
 mod gguf;
+mod hub;
 mod library;
 mod runtime;
+mod theme;
 mod ui;
 mod util;
 
@@ -42,6 +44,7 @@ fn main() -> ExitCode {
         "rm-service" => cmd_rm_service(rest),
         "delete" => cmd_delete(rest),
         "add-dir" => cmd_add_dir(rest),
+        "fetch" => cmd_fetch(rest),
         "set-server" => cmd_set_server(rest),
         "paths" => {
             println!("配置: {}", Config::path().display());
@@ -72,6 +75,8 @@ fn print_help() {
   llmmgr status [--json]          运行中服务的状态
   llmmgr delete <模型路径|文件名> [--yes]
   llmmgr add-dir <目录>
+  llmmgr fetch <仓库> [文件名] [--dir 目录]
+                                  从 Hugging Face 拉取 GGUF 模型（不带文件名时自动挑量化）
   llmmgr set-server <llama-server 路径|auto>
   llmmgr paths                    显示配置/状态/日志位置
 
@@ -99,8 +104,8 @@ fn cmd_list(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     println!(
-        "{:<44} {:>9} {:>7} {:>8} {:<12} {}",
-        "模型", "大小", "参数", "量化", "架构", "路径"
+        "{:<44} {:>9} {:>7} {:>8} {:<12} 路径",
+        "模型", "大小", "参数", "量化", "架构"
     );
     let mut total = 0u64;
     for model in &models {
@@ -118,7 +123,11 @@ fn cmd_list(args: &[String]) -> ExitCode {
             model.path.display()
         );
     }
-    println!("\n共 {} 个模型, 合计 {}", models.len(), util::human_bytes(total));
+    println!(
+        "\n共 {} 个模型, 合计 {}",
+        models.len(),
+        util::human_bytes(total)
+    );
     ExitCode::SUCCESS
 }
 
@@ -138,9 +147,19 @@ fn cmd_services(_args: &[String]) -> ExitCode {
         let status = match running {
             Some(run) => {
                 let health = runtime::health(&service.host, service.port)
-                    .map(|v| v.get("status").and_then(|s| s.as_str()).unwrap_or("?").to_string())
+                    .map(|v| {
+                        v.get("status")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("?")
+                            .to_string()
+                    })
                     .unwrap_or_else(|_| "加载中".into());
-                format!("运行中 pid {} {} ({}s)", run.pid, health, util::now_unix() - run.started_at)
+                format!(
+                    "运行中 pid {} {} ({}s)",
+                    run.pid,
+                    health,
+                    util::now_unix() - run.started_at
+                )
             }
             None => "已停止".to_string(),
         };
@@ -158,7 +177,10 @@ fn cmd_services(_args: &[String]) -> ExitCode {
 
 fn cmd_start(args: &[String], start: bool) -> ExitCode {
     let Some(id) = args.first() else {
-        eprintln!("用法: llmmgr {} <服务id>", if start { "start" } else { "stop" });
+        eprintln!(
+            "用法: llmmgr {} <服务id>",
+            if start { "start" } else { "stop" }
+        );
         return ExitCode::FAILURE;
     };
     let config = require_config();
@@ -213,7 +235,7 @@ fn cmd_restart(args: &[String]) -> ExitCode {
     };
     let _ = runtime::stop(&service.id, &mut state);
     std::thread::sleep(std::time::Duration::from_millis(400));
-    cmd_start(&[id.clone()], true)
+    cmd_start(std::slice::from_ref(id), true)
 }
 
 fn cmd_status(args: &[String]) -> ExitCode {
@@ -244,7 +266,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
         }));
     }
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
         return ExitCode::SUCCESS;
     }
     if rows.is_empty() {
@@ -372,7 +397,11 @@ fn cmd_delete(args: &[String]) -> ExitCode {
             .filter(|m| {
                 m.display_name().to_lowercase().contains(&target_lc)
                     || m.file_name.to_lowercase().contains(&target_lc)
-                    || m.path.display().to_string().to_lowercase().contains(&target_lc)
+                    || m.path
+                        .display()
+                        .to_string()
+                        .to_lowercase()
+                        .contains(&target_lc)
             })
             .collect();
     }
@@ -392,7 +421,11 @@ fn cmd_delete(args: &[String]) -> ExitCode {
     };
     let files = model.all_files();
     let size = model.total_size();
-    println!("将删除 {} 个文件, 释放 {}:", files.len(), util::human_bytes(size));
+    println!(
+        "将删除 {} 个文件, 释放 {}:",
+        files.len(),
+        util::human_bytes(size)
+    );
     for file in &files {
         println!("  {}", file.display());
     }
@@ -434,6 +467,127 @@ fn cmd_add_dir(args: &[String]) -> ExitCode {
         Err(err) => {
             eprintln!("保存失败: {err}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_fetch(args: &[String]) -> ExitCode {
+    let mut repo: Option<String> = None;
+    let mut file: Option<String> = None;
+    let mut dir: Option<PathBuf> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dir" => dir = iter.next().map(PathBuf::from),
+            "--file" => file = iter.next().cloned(),
+            other if other.starts_with("--") => {
+                eprintln!("未知参数: {other}");
+                return ExitCode::FAILURE;
+            }
+            other if repo.is_none() => repo = Some(other.to_string()),
+            other => file = Some(other.to_string()),
+        }
+    }
+    let Some(repo) = repo else {
+        eprintln!("用法: llmmgr fetch <仓库> [文件名] [--dir 目录]");
+        return ExitCode::FAILURE;
+    };
+    let config = require_config();
+    let Some(dir) = dir.or_else(|| config.model_dirs.first().cloned()) else {
+        eprintln!("还没有模型目录，先运行 llmmgr add-dir <目录>");
+        return ExitCode::FAILURE;
+    };
+
+    let mut files = Vec::new();
+    let mut base = None;
+    let mut last_err = String::new();
+    for candidate in hub::candidates(config.hub_endpoint.as_deref()) {
+        match hub::http_get(&format!("{candidate}/api/models/{repo}?blobs=true"), 25) {
+            Ok(body) => match hub::parse_files(&body) {
+                Ok(list) => {
+                    base = Some(candidate);
+                    files = list;
+                    break;
+                }
+                Err(err) => last_err = err,
+            },
+            Err(err) => last_err = format!("{candidate}: {err}"),
+        }
+    }
+    let Some(base) = base else {
+        eprintln!("无法读取 {repo}: {last_err}");
+        return ExitCode::FAILURE;
+    };
+
+    let recommended = hub::recommend(&files);
+    let chosen = match &file {
+        Some(name) => match files.iter().find(|f| &f.name == name) {
+            Some(found) => found.clone(),
+            None => {
+                eprintln!("仓库里没有 {name}，可选文件:");
+                for item in &files {
+                    eprintln!("  {:>10}  {}", util::human_bytes(item.size), item.name);
+                }
+                return ExitCode::FAILURE;
+            }
+        },
+        None => {
+            for (idx, item) in files.iter().enumerate() {
+                let mark = if Some(idx) == recommended { "*" } else { " " };
+                println!("{mark} {:>10}  {}", util::human_bytes(item.size), item.name);
+            }
+            match recommended {
+                Some(idx) => files[idx].clone(),
+                None => {
+                    eprintln!("没有可下载的 .gguf 文件");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    };
+
+    println!(
+        "{}  →  {}  ({})",
+        chosen.name,
+        dir.display(),
+        util::human_bytes(chosen.size)
+    );
+    let mut download = match hub::Download::start(&base, &repo, &chosen.name, &dir, chosen.size) {
+        Ok(download) => download,
+        Err(err) => {
+            eprintln!("无法开始下载: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    loop {
+        let finished = download.poll();
+        let speed = hub::speed_label(download.speed);
+        let eta = download
+            .eta()
+            .map(hub::eta_label)
+            .unwrap_or_else(|| "剩余 —".into());
+        eprint!(
+            "\r  {:>5.1}%  {:>9} / {:<9} {:>10}  {}   ",
+            download.ratio() * 100.0,
+            util::human_bytes(download.received),
+            util::human_bytes(download.total),
+            speed,
+            eta
+        );
+        if finished {
+            eprintln!();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    match download.error.clone() {
+        Some(err) => {
+            eprintln!("下载失败: {err}");
+            ExitCode::FAILURE
+        }
+        None => {
+            println!("已保存 {}", download.dest.display());
+            ExitCode::SUCCESS
         }
     }
 }

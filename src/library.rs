@@ -218,7 +218,7 @@ pub fn scan(dirs: &[PathBuf]) -> (Vec<ModelEntry>, Vec<String>) {
             modified,
         });
     }
-    models.sort_by(|a, b| b.size.cmp(&a.size));
+    models.sort_by_key(|m| std::cmp::Reverse(m.size));
     (models, errors)
 }
 
