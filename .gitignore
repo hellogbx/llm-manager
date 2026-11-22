@@ -3,3 +3,5 @@
 /.rust
 /.cargo
 *.log
+*.dmg
+.DS_Store
